@@ -27,12 +27,43 @@ from backend.app.evaluation.clustering_experiments import (
 )
 
 
-DEFAULT_MIN_TOPIC_SIZES = [10, 25, 50]
-DEFAULT_MIN_SAMPLES = [3, 5, 10]
-DEFAULT_UMAP_N_NEIGHBORS = [25, 50, 75]
+DEFAULT_MIN_TOPIC_SIZES = [50, 75, 100]
+DEFAULT_MIN_SAMPLES = [10, 15, 20]
+DEFAULT_UMAP_N_NEIGHBORS = [15, 25, 30]
 DEFAULT_UMAP_N_COMPONENTS = [5, 10]
 DEFAULT_UMAP_MIN_DISTS = [0.05, 0.1]
 DEFAULT_CLUSTER_SELECTION_METHODS = ["eom"]
+
+
+def resolve_clustering_config(max_articles: int | None) -> dict:
+    if max_articles is None:
+        max_articles = 30000
+    if max_articles >= 20000:
+        return {
+            "max_articles": 12000,
+            "min_topic_sizes": [75, 100, 150],
+            "min_samples": [15, 20, 30],
+            "umap_n_neighbors": [15, 25, 30],
+            "umap_n_components": [5, 10],
+            "umap_min_dists": [0.05, 0.1],
+        }
+    if max_articles >= 10000:
+        return {
+            "max_articles": min(max_articles, 12000),
+            "min_topic_sizes": [50, 75, 100],
+            "min_samples": [10, 15, 20],
+            "umap_n_neighbors": [15, 25, 30],
+            "umap_n_components": [5, 10],
+            "umap_min_dists": [0.05, 0.1],
+        }
+    return {
+        "max_articles": max_articles,
+        "min_topic_sizes": [25, 50, 75],
+        "min_samples": [5, 10, 15],
+        "umap_n_neighbors": [15, 25, 30],
+        "umap_n_components": [5, 10],
+        "umap_min_dists": [0.05, 0.1],
+    }
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:

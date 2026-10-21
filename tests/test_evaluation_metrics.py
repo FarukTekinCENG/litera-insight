@@ -3,6 +3,7 @@ import json
 import math
 from types import SimpleNamespace
 
+import numpy as np
 import pytest
 
 from backend.app.evaluation.clustering_metrics import evaluate_clustering_records
@@ -21,7 +22,125 @@ from backend.app.evaluation.rag_golden_set import (
 from backend.app.evaluation.schemas import GoldenQuestion
 from backend.app.schemas.retrieval import RetrievedArticle
 from backend.app.schemas.source import SourceReference
+from scripts.run_current_clustering_benchmark import (
+    compute_external_metrics,
+    compute_dunn_index,
+    load_reference_labels,
+    resolve_clustering_config,
+    resolve_external_clustering_config,
+    summarize_all_spaces,
+)
 from scripts.run_evaluation import main as run_evaluation_main
+
+
+def test_large_corpus_clustering_tuning_uses_sampled_config():
+    cfg = resolve_clustering_config(30000)
+
+    assert cfg["max_articles"] == 12000
+    assert cfg["min_topic_size"] >= 75
+    assert cfg["umap_n_neighbors"] <= 30
+    assert cfg["umap_min_dist"] >= 0.05
+
+
+def test_benchmark_reports_umap_and_normalized_embedding_spaces():
+    labels = np.array([0, 0, 1, 1, -1])
+    embeddings = np.array(
+        [[1.0, 0.0], [0.9, 0.1], [0.0, 1.0], [0.1, 0.9], [0.5, 0.5]],
+        dtype=np.float32,
+    )
+    umap_representation = embeddings * 2.0
+
+    result = summarize_all_spaces(labels, embeddings, umap_representation)
+
+    assert set(result) == {"umap", "normalized_embedding"}
+    assert result["umap"]["space"] == "umap"
+    assert result["normalized_embedding"]["space"] == "normalized_embedding"
+    assert result["umap"]["silhouette_score"] is not None
+    assert result["normalized_embedding"]["silhouette_score"] is not None
+
+
+def test_dunn_index_uses_pairwise_cluster_diameter():
+    matrix = np.array([[0.0], [3.0], [10.0], [11.0]])
+    labels = np.array([0, 0, 1, 1])
+
+    assert compute_dunn_index(matrix, labels) == pytest.approx(7.0 / 3.0)
+
+
+def test_external_metrics_handle_label_permutation():
+    result = compute_external_metrics(
+        [1, 2, 3, 4],
+        np.array([1, 1, 0, 0]),
+        {1: "A", 2: "A", 3: "B", 4: "B"},
+    )
+
+    assert result["direct_match_accuracy"] is None
+    assert result["hungarian_mapping_accuracy"] == pytest.approx(1.0)
+    assert result["majority_vote_purity"] == pytest.approx(1.0)
+    assert result["normalized_mutual_information"] == pytest.approx(1.0)
+    assert result["adjusted_rand_index"] == pytest.approx(1.0)
+
+
+def test_external_metrics_calculate_mixed_cluster_purity():
+    result = compute_external_metrics(
+        [1, 2, 3, 4, 5],
+        np.array([0, 0, 0, 0, 1]),
+        {1: "A", 2: "A", 3: "A", 4: "B", 5: "B"},
+    )
+
+    assert result["majority_vote_purity"] == pytest.approx(4 / 5)
+
+
+def test_external_metrics_exclude_outliers_and_missing_references():
+    result = compute_external_metrics(
+        [1, 2, 3, 99],
+        np.array([0, 0, -1, 1]),
+        {1: "A", 2: "A", 3: "B", 4: "C"},
+    )
+
+    assert result["golden_set_article_count"] == 4
+    assert result["matched_article_count"] == 3
+    assert result["evaluation_sample_count"] == 2
+    assert result["outlier_count"] == 1
+    assert result["outlier_handling"] == "excluded"
+
+
+def test_reference_loader_deduplicates_and_excludes_conflicts():
+    rows = [
+        {"article_id": "1", "title": "A", "cluster_description": "Topic A"},
+        {"article_id": "1", "title": "A", "cluster_description": "Topic A"},
+        {"article_id": "2", "title": "B", "cluster_description": "Topic B"},
+        {"article_id": "2", "title": "B", "cluster_description": "Topic C"},
+    ]
+
+    labels, ambiguous_ids, counts = load_reference_labels(rows)
+
+    assert labels == {1: "Topic A"}
+    assert ambiguous_ids == {2}
+    assert counts == {1: 2, 2: 2}
+
+
+def test_external_metrics_return_safe_empty_result():
+    result = compute_external_metrics([], np.array([], dtype=np.int64), {})
+
+    assert result["evaluation_sample_count"] == 0
+    assert result["hungarian_mapping_accuracy"] == 0.0
+    assert result["normalized_mutual_information"] == 0.0
+
+
+def test_external_config_is_bounded_for_small_golden_corpus():
+    args = SimpleNamespace(
+        min_topic_size=100,
+        min_samples=20,
+        umap_n_neighbors=30,
+        umap_n_components=10,
+        umap_min_dist=0.05,
+    )
+
+    config = resolve_external_clustering_config(args, 44)
+
+    assert config["min_topic_size"] == 5
+    assert config["min_samples"] == 2
+    assert config["umap_n_neighbors"] == 30
 
 
 def test_retrieval_metric_math_and_duplicate_deduplication():
